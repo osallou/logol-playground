@@ -16,4 +16,4 @@ run result.py
 # todo
 
 * manage queues with this runId to allow parallel runs without conflict
-* Load sequence from config file
+* Load sequence etc.. from config file

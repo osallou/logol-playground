@@ -116,6 +116,7 @@ def print_result(data):
 
 
 def send_msg(msg_to, data):
+    #TODO add runId to msg_to and use same for queue definition
     uid = 'logol:' + uuid.uuid4().hex
     redis_client.set(uid, json.dumps(data))
     channel.queue_declare(queue=msg_to, durable=True)
@@ -224,11 +225,9 @@ def callback(ch, method, properties, body):
             nbNext = len(nextVars)
         if nbNext:
             incCount = (nbNext * len(matches)) - 1
-            logging.warn('## inc count by ' + str(incCount))
             redis_client.incr('logol:count', incCount)
         else:
             incCount = len(matches) - 1
-            logging.warn('## inc count by ' + str(incCount))
             redis_client.incr('logol:count', incCount)
         if not matches:
             redis_client.incr('logol:ban')
@@ -246,26 +245,6 @@ def callback(ch, method, properties, body):
             go_next(result)
     logging.info(" [x] Done")
 
-    '''
-    nextVars = wf[model]['vars'][modelVar]['next']
-
-    if not nextVars:
-        # Should check if there is a from to go back to calling model (pop result from)
-        if result['from']:
-            (back_model, back_var) = result['from'].pop().split('.')
-            result['step'] = STEP_POST
-            msg_to = 'logol-%s-%s' % (back_model, back_var)
-            send_msg(msg_to, result)
-        else:
-            print_result(result)
-            redis_client.incr('logol:match', 1)
-
-    else:
-        redis_client.incr('logol:count', len(nextVars) -1)
-        for nextVar in nextVars:
-            msg_to = 'logol-%s-%s' % (model, nextVar)
-            send_msg(msg_to, result)
-    '''
     ch.basic_ack(delivery_tag = method.delivery_tag)
 
 channel.basic_qos(prefetch_count=1)
