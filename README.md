@@ -2,6 +2,8 @@
 
 run one proc per variable in models
 
+run result.py
+
 # Running a proc
 
     LOGOL_MODEL=mod2 LOGOL_VAR=var1 python listen.py

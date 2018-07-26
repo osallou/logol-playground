@@ -49,6 +49,7 @@ def send_msg(msg_to, data):
 
 
 def __stop_processes():
+    send_msg('logol-result', {'step': STEP_END})
     for k in wf.keys():
         if k.startswith('mod'):
             for v in wf[k]['vars'].keys():

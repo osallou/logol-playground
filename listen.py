@@ -137,8 +137,9 @@ def go_next(result):
             msg_to = 'logol-%s-%s' % (back_model, back_var)
             send_msg(msg_to, result)
         else:
-            print_result(result)
-            redis_client.incr('logol:match', 1)
+            send_msg('logol-result', result)
+            #print_result(result)
+            #redis_client.incr('logol:match', 1)
 
     else:
         '''
