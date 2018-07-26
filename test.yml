@@ -1,0 +1,49 @@
+morphisms:
+  - foo:
+    - a
+    - g
+
+mod2:
+    comment: 'mod2()'
+    start: 'var1'
+    vars:
+        var1:
+            value: 'ttt'
+            next: null
+
+
+mod1:
+   comment: 'mod1(-R1)'
+   params:
+     outputs:
+       - 'R1'
+   start: 'var1'
+   vars:
+     var1:
+         value: 'aaa'
+         next:
+           - var2
+     var2:
+         value: 'acgt'
+         string_constraints:
+             save_as: 'R1'
+         next:
+          - var3
+          - var4
+     var3:
+         value: null
+         string_constraints:
+           content: 'R1'
+         next:
+           - var5
+     var4:
+         value: null
+         model: 'mod2'
+         next:
+           - var5
+     var5:
+         value: 't'
+         next: null
+
+run:
+ - mod1
