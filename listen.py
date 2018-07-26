@@ -73,6 +73,7 @@ with open("test.yml", 'r') as stream:
 
 model = os.environ.get('LOGOL_MODEL',None)
 modelVar = os.environ.get('LOGOL_VAR',None)
+runId = os.environ.get('LOGOL_ID', 0)
 
 if not model or not modelVar:
     logging.error('model or modelVar not defined')

@@ -15,4 +15,5 @@ run result.py
 
 # todo
 
-manage counter to stop procs when return multiple solutions
+* manage queues with this runId to allow parallel runs without conflict
+* Load sequence from config file
