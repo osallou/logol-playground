@@ -179,13 +179,45 @@ def go_next(result):
             send_msg(msg_to, result)
         else:
             result['outputs'] = []
+            result['iteration'] = 1
             for modelOutput in wf[model]['params']['outputs']:
                     result['outputs'].append(result['context_vars'][-1][modelOutput])
             send_msg('logol-result', result)
     else:
+        result['iteration'] = 1
         for nextVar in nextVars:
             msg_to = 'logol-%s-%s' % (model, nextVar)
             send_msg(msg_to, result)
+
+
+def call_model(result, contextVars=None):
+    curVar = wf[model]['vars'][modelVar]
+    callModel = curVar['model']['name']
+    msg_to = 'logol-%s-%s' % (callModel, wf[callModel]['start'])
+    new_result = {
+                    'from': [],
+                    'matches': [],
+                    'context_vars': [],
+                    'spacer': False,
+                    'context': [],
+                    'step': STEP_PRE,
+                    'position': 0,
+                    'iteration': result.get('iteration', 0) + 1
+    }
+    new_result['from'] = result['from']
+    result['from'] = []
+    new_result['from'].append(model + '.' + modelVar)
+    new_result['context_vars'] = result['context_vars']
+    new_result['context'].append(result['matches'])
+    new_result['matches'] = []
+    new_result['spacer'] = result['spacer']
+    new_result['position'] = result['position']
+    new_result['inputs'] = []
+    new_result['outputs'] = []
+    if contextVars:
+        for modelInput in curVar['model']['inputs']:
+            new_result['inputs'].append(contextVars[modelInput])
+    send_msg(msg_to, new_result)
 
 
 def callback(ch, method, properties, body):
@@ -201,7 +233,7 @@ def callback(ch, method, properties, body):
     result = json.loads(bodydata.decode('UTF-8'))
     if result['step'] == g.STEP_BAN:
         ban_status = True
-        logging.info("BAN request receiving, skipping messages")
+        logger.info("BAN request receiving, skipping messages")
         ch.basic_ack(delivery_tag=method.delivery_tag)
         return
     if result['step'] == STEP_END:
@@ -253,6 +285,7 @@ def callback(ch, method, properties, body):
         match = Match()
         match.match['model'] = model
         match.match['id'] = modelVar
+
         for m in result['matches']:
             if match.match['start'] == 0 or m['start'] < match.match['start']:
                 match.match['start'] = m['start']
@@ -267,6 +300,23 @@ def callback(ch, method, properties, body):
         result['step'] = STEP_NONE
         result['position'] = match.match['end']
         go_next(result)
+        curVar = wf[model]['vars'][modelVar]
+        logger.debug(
+            'model iteration status %d:%d:%d' %
+            (
+                result.get('iteration', 0),
+                curVar['model'].get('repeatMin', 1),
+                curVar['model'].get('repeatMax', 1)
+            )
+        )
+
+        if (
+            result['iteration'] <= curVar['model'].get('repeatMax', 1)
+        ):
+            logger.info('model iteration %d' % (result.get('iteration', 0)))
+            redis_client.incr('logol:count', 1)
+            call_model(result, contextVars=result['context_vars'][-1])
+
     else:
         match = Match()
         curVar = wf[model]['vars'][modelVar]
@@ -274,6 +324,8 @@ def callback(ch, method, properties, body):
         # if next is a model/view should add a *from* model
         if curVar.get('model', None):
             logger.debug("call a model")
+            call_model(result, contextVars=contextVars)
+            '''
             callModel = curVar['model']['name']
             msg_to = 'logol-%s-%s' % (callModel, wf[callModel]['start'])
             new_result = {
@@ -300,6 +352,7 @@ def callback(ch, method, properties, body):
                 new_result['inputs'].append(contextVars[modelInput])
 
             send_msg(msg_to, new_result)
+            '''
             ch.basic_ack(delivery_tag=method.delivery_tag)
             return
 

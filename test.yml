@@ -2,6 +2,16 @@ morphisms:
   - foo:
     - a
     - g
+mod3:
+    comment: 'mod3()'
+    start: 'var1'
+    params:
+        inputs: []
+        outputs: []
+    vars:
+        var1:
+            value: 'a'
+            next: null
 
 mod2:
     comment: 'mod2(+R2)'
@@ -38,9 +48,14 @@ mod1:
           - var3
           - var4
      var3:
+         comments: 'mod3()'
          value: null
-         string_constraints:
-           content: 'R1'
+         model:
+             name: 'mod3'
+             inputs: []
+             outputs: []
+             repeatMin: 1
+             repeatMax: 4
          next:
            - var5
      var4:
@@ -51,6 +66,8 @@ mod1:
              inputs:
                  - R1
              outputs: []
+             repeatMin: 1
+             repeatMax: 2
          next:
            - var5
      var5:
