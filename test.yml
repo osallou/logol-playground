@@ -4,27 +4,34 @@ morphisms:
     - g
 
 mod2:
-    comment: 'mod2()'
+    comment: 'mod2(+R2)'
     start: 'var1'
+    params:
+        inputs:
+            - R2
+        outputs: []
     vars:
         var1:
-            value: 'ttt'
+            value: null
+            string_constraints:
+                content: 'R2'
             next: null
 
 
 mod1:
    comment: 'mod1(-R1)'
    params:
+     inputs: []
      outputs:
        - 'R1'
    start: 'var1'
    vars:
      var1:
-         value: 'aaa'
+         value: 'cc'
          next:
            - var2
      var2:
-         value: 'acgt'
+         value: 'aaa'
          string_constraints:
              save_as: 'R1'
          next:
@@ -37,12 +44,17 @@ mod1:
          next:
            - var5
      var4:
+         comments: 'mod2(+R1)'
          value: null
-         model: 'mod2'
+         model:
+             name: 'mod2'
+             inputs:
+                 - R1
+             outputs: []
          next:
            - var5
      var5:
-         value: 't'
+         value: 'cgt'
          next: null
 
 run:

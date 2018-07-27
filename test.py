@@ -27,8 +27,8 @@ STEP_END = 2
 result = {
     'from': [],
     'matches': [],
-    'context_vars': {},
-    'spacer': False,
+    'context_vars': [],
+    'spacer': True,
     'context': [],
     'step': None,
     'position': 0

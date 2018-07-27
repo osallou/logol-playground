@@ -15,6 +15,8 @@ STEP_END = 2
 
 queue = 'logol-result'
 
+logging.basicConfig(level=logging.INFO)
+
 connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
 channel = connection.channel()
 channel.queue_declare(queue=queue, durable=True)
@@ -40,6 +42,7 @@ def callback(ch, method, properties, body):
         result_file.close()
         sys.exit(0)
 
+    logging.info("Res: " + json.dumps(result['matches']))
     result_file.write(json.dumps(result['matches']) + "\n")
     redis_client.incr('logol:match', 1)
     ch.basic_ack(delivery_tag = method.delivery_tag)

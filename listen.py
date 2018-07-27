@@ -102,9 +102,9 @@ def __find(data, context_vars=[], spacer=False):
         for m in matches:
             if not spacer:
                 # should control minposition
-                logging.debug('check minpos %d against match pos %d' % (data.minPosition, m['start']))
+                logging.info('check minpos %d against match pos %d' % (data.minPosition, m['start']))
                 if m['start'] != data.minPosition:
-                    logging.debug('skip match ' + json.dumps(m))
+                    logging.info('skip match ' + json.dumps(m))
                     ban += 1
                     continue
             match = Match()
