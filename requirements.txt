@@ -1,3 +1,4 @@
 pika
 redis
 PyYAML
+pbr

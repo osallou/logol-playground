@@ -11,14 +11,12 @@ import uuid
 import yaml
 import redis
 
-#logging.basicConfig(level=logging.INFO)
+import logol.grammar as g
+
+logging.basicConfig(level=logging.INFO)
 
 sequence = 'cccccaaaaaacgtttttt'
 
-result = {
-    'from': [],
-    'matches': []
-}
 
 STEP_NONE = -1
 STEP_PRE = 0
@@ -90,24 +88,37 @@ redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
 logging.info(' [*] Waiting for messages. To exit press CTRL+C')
 
 
-def __find(data, vars=[]):
+def __find(data, context_vars=[], spacer=False):
     curVar = wf[model]['vars'][modelVar]
     if not curVar['value'] and curVar.get('string_constraints', None) and curVar['string_constraints'].get('content', None):
-        curVar['value'] = vars[curVar['string_constraints']['content']]['value']
+        curVar['value'] = context_vars[curVar['string_constraints']['content']]['value']
+    results = []
     if curVar['value']:
         logging.info(" [x] search " + str(curVar['value']))
-        posMatch = sequence.find(curVar['value'])
-        if posMatch < 0:
+        matches = g.find_exact(curVar['value'], sequence)
+        if not matches:
             return None
-        logging.info(" [x] got a match at " + str(posMatch))
-        data.match['id'] = modelVar
-        data.match['model'] = model
-        data.match['start'] = posMatch
-        data.match['end'] = posMatch + len(curVar['value'])
-        data.match['info'] = curVar['value']
-        # to be removed
-        data.match['value'] = sequence[posMatch:posMatch + len(curVar['value'])]
-    return  [data]
+        ban = 0
+        for m in matches:
+            if not spacer:
+                # should control minposition
+                logging.debug('check minpos %d against match pos %d' % (data.minPosition, m['start']))
+                if m['start'] != data.minPosition:
+                    logging.debug('skip match ' + json.dumps(m))
+                    ban += 1
+                    continue
+            match = Match()
+            match.match['id'] = modelVar
+            match.match['model'] = model
+            match.match['start'] = m['start']
+            match.match['end'] = m['end']
+            match.match['info'] = curVar['value']
+            match.match['value'] = sequence[m['start']: m['start'] + len(curVar['value'])]  # TODO to be removed, for debug only
+            results.append(match)
+            logging.error('Matches: ' + json.dumps(match.match))
+        logging.info(" [x] got matches " + str(len(matches) - ban))
+
+    return  results
 
 
 def print_result(data):
@@ -136,6 +147,12 @@ def go_next(result):
         if result['from']:
             (back_model, back_var) = result['from'].pop().split('.')
             result['step'] = STEP_POST
+            # set output vars
+            result['outputs'] = []
+            curVar = wf[model]['vars'][modelVar]
+            for modelOutput in wf[model]['params']['outputs']:
+                result['outputs'].append(result['context_vars'][-1][modelOutput])
+
             msg_to = 'logol-%s-%s' % (back_model, back_var)
             send_msg(msg_to, result)
         else:
@@ -167,9 +184,34 @@ def callback(ch, method, properties, body):
         logging.warn('received stop message, exiting...')
         ch.basic_ack(delivery_tag = method.delivery_tag)
         sys.exit(0)
+
+
+    newContextVars = {}
+    # if we start a new model
+    if modelVar == wf[model]['start']:
+        if wf[model].get('params', None) and result.get('inputs', None):
+            # has input parameters
+            newContextVars = {}
+            for i in range(0, len(wf[model]['params']['inputs'])):
+                inputId = wf[model]['params']['inputs'][i]
+                newContextVars[inputId] = result['inputs'][i]
+        result['context_vars'].append(newContextVars)
+
+    contextVars = result['context_vars'][-1]
+    logging.debug('context vars: ' + json.dumps(contextVars))
+
+
     if result['step'] == STEP_POST:
         # set back context , insert result as children and go to next var
         prev_context = result['context'].pop()
+        prev_context_vars = result['context_vars'].pop()
+        if wf[model].get('params', None) and result.get('outputs', None):
+            # has output parameters
+            for i in range(0, len(wf[model]['params']['outputs'])):
+                outputId = wf[model]['params']['outputs'][i]
+                contextVars[outputIdId] = result['outputs'][i]
+
+
         match = Match()
         match.match['model'] = model
         match.match['id'] = modelVar
@@ -194,11 +236,12 @@ def callback(ch, method, properties, body):
         # if next is a model/view should add a *from* model
         if curVar.get('model', None):
             logging.info("call a model")
-            msg_to = 'logol-%s-%s' % (curVar['model'], wf[curVar['model']]['start'])
+            callModel = curVar['model']['name']
+            msg_to = 'logol-%s-%s' % (callModel, wf[callModel]['start'])
             new_result = {
                     'from': [],
                     'matches': [],
-                    'context_vars': {},
+                    'context_vars': [],
                     'spacer': False,
                     'context': [],
                     'step': STEP_PRE,
@@ -212,15 +255,27 @@ def callback(ch, method, properties, body):
             new_result['matches'] = []
             new_result['spacer'] = result['spacer']
             new_result['position'] = result['position']
+            # result['context_vars']
+            new_result['inputs'] = []
+            new_result['outputs'] = []
+            for modelInput in curVar['model']['inputs']:
+                new_result['inputs'].append(contextVars[modelInput])
+
             send_msg(msg_to, new_result)
             ch.basic_ack(delivery_tag = method.delivery_tag)
             return
 
 
         match.minPosition = result['position']
-        matches = __find(match,vars=result['context_vars'])
+        matches = __find(match,context_vars=contextVars, spacer=result['spacer'])
         nextVars = wf[model]['vars'][modelVar]['next']
         nbNext = 0
+
+        if not matches:
+            redis_client.incr('logol:ban')
+            ch.basic_ack(delivery_tag = method.delivery_tag)
+            return
+
         if nextVars:
             nbNext = len(nextVars)
         if nbNext:
@@ -229,19 +284,18 @@ def callback(ch, method, properties, body):
         else:
             incCount = len(matches) - 1
             redis_client.incr('logol:count', incCount)
-        if not matches:
-            redis_client.incr('logol:ban')
-            ch.basic_ack(delivery_tag = method.delivery_tag)
-            return
+
         prev_matches = result['matches']
         prev_from = result['from']
+
+        result['spacer'] = False
         for m in matches:
             result['from'] = copy.deepcopy(prev_from)
             result['position'] = m.match['end']
             result['matches'] = prev_matches + [m.match]
             if curVar.get('string_constraints', None) and curVar['string_constraints'].get('save_as', None):
                 save_as = curVar['string_constraints']['save_as']
-                result['context_vars'][save_as] = m.match
+                contextVars[save_as] = m.match
             go_next(result)
     logging.info(" [x] Done")
 
