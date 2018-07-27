@@ -1,7 +1,9 @@
 import logging
-import re
+# import re
+
 
 logger = logging.getLogger('logol')
+
 
 def find_exact(match, part, pos=None):
     # naive search only for testing
@@ -9,7 +11,7 @@ def find_exact(match, part, pos=None):
     minStart = 0
     if pos:
         minStart = pos
-    for i in range(minStart ,len(part)):
+    for i in range(minStart, len(part)):
         word = part[i:i + len(match)]
         if match == word:
             matches.append({
