@@ -129,7 +129,11 @@ def print_result(data):
 def send_msg(msg_to, data):
     #TODO add runId to msg_to and use same for queue definition
     uid = 'logol:' + uuid.uuid4().hex
-    redis_client.set(uid, json.dumps(data))
+    # sort matches by start position
+    data['matches'].sort(key=lambda x: x['start'])
+    json_data = json.dumps(data)
+    logging.debug("send msg " + json_data)
+    redis_client.set(uid, json_data)
     channel.queue_declare(queue=msg_to, durable=True)
     channel.basic_publish(exchange='',
                           routing_key=msg_to,
@@ -156,6 +160,10 @@ def go_next(result):
             msg_to = 'logol-%s-%s' % (back_model, back_var)
             send_msg(msg_to, result)
         else:
+            curVar = wf[model]['vars'][modelVar]
+            result['outputs'] = []
+            for modelOutput in wf[model]['params']['outputs']:
+                    result['outputs'].append(result['context_vars'][-1][modelOutput])
             send_msg('logol-result', result)
             #print_result(result)
             #redis_client.incr('logol:match', 1)
@@ -179,15 +187,16 @@ def callback(ch, method, properties, body):
         return
 
     redis_client.delete(body)
-    result = json.loads(bodydata)
+    result = json.loads(bodydata.decode('UTF-8'))
     if result['step'] == STEP_END:
         logging.warn('received stop message, exiting...')
         ch.basic_ack(delivery_tag = method.delivery_tag)
         sys.exit(0)
 
+    logging.debug("Receive msg: " + json.dumps(result))
 
     newContextVars = {}
-    # if we start a new model
+    # if we start a new model or come back to model
     if modelVar == wf[model]['start']:
         if wf[model].get('params', None) and result.get('inputs', None):
             # has input parameters
@@ -196,13 +205,16 @@ def callback(ch, method, properties, body):
                 inputId = wf[model]['params']['inputs'][i]
                 newContextVars[inputId] = result['inputs'][i]
         result['context_vars'].append(newContextVars)
+        result['inputs'] = []
+
 
     contextVars = result['context_vars'][-1]
-    logging.debug('context vars: ' + json.dumps(contextVars))
+    logging.error('context vars: ' + json.dumps(contextVars))
 
 
     if result['step'] == STEP_POST:
         # set back context , insert result as children and go to next var
+        logging.error("##OSALLOU RES "+json.dumps(result))
         prev_context = result['context'].pop()
         prev_context_vars = result['context_vars'].pop()
         if wf[model].get('params', None) and result.get('outputs', None):
@@ -210,6 +222,7 @@ def callback(ch, method, properties, body):
             for i in range(0, len(wf[model]['params']['outputs'])):
                 outputId = wf[model]['params']['outputs'][i]
                 contextVars[outputIdId] = result['outputs'][i]
+        result['outputs'] = []
 
 
         match = Match()

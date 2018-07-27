@@ -42,7 +42,7 @@ def callback(ch, method, properties, body):
         result_file.close()
         sys.exit(0)
 
-    logging.info("Res: " + json.dumps(result['matches']))
+    logging.info("Res: " + json.dumps(result))
     result_file.write(json.dumps(result['matches']) + "\n")
     redis_client.incr('logol:match', 1)
     ch.basic_ack(delivery_tag = method.delivery_tag)
