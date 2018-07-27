@@ -16,13 +16,16 @@ import logol.grammar as g
 
 logging.basicConfig(level=logging.INFO)
 
+logger = logging.getLogger('logol')
+logger.setLevel(logging.DEBUG)
+
 sequence = 'cccccaaaaaacgtttttt'
 
 
-STEP_NONE = -1
-STEP_PRE = 0
-STEP_POST = 1
-STEP_END = 2
+STEP_NONE = g.STEP_NONE
+STEP_PRE = g.STEP_PRE
+STEP_POST = g.STEP_POST
+STEP_END = g.STEP_END
 
 
 class Match(object):
@@ -77,10 +80,12 @@ modelVar = os.environ.get('LOGOL_VAR', None)
 runId = os.environ.get('LOGOL_ID', 0)
 
 if not model or not modelVar:
-    logging.error('model or modelVar not defined')
+    logger.error('model or modelVar not defined')
     sys.exit(1)
 
 queue = 'logol-%s-%s' % (model, modelVar)
+
+ban_status = False
 
 connection = pika.BlockingConnection(
     pika.ConnectionParameters(host='localhost')
@@ -90,7 +95,7 @@ channel.queue_declare(queue=queue, durable=True)
 
 redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
 
-logging.info(' [*] Waiting for messages. To exit press CTRL+C')
+logger.info(' [*] Waiting for messages. To exit press CTRL+C')
 
 
 def __get_value(start, length):
@@ -108,7 +113,7 @@ def __find(data, context_vars=[], spacer=False):
         curVar['value'] = context_vars[content_constraint]['value']
     results = []
     if curVar['value']:
-        logging.info(" [x] search " + str(curVar['value']))
+        logger.debug(" [x] search " + str(curVar['value']))
         matches = g.find_exact(curVar['value'], sequence)
         if not matches:
             return None
@@ -116,12 +121,12 @@ def __find(data, context_vars=[], spacer=False):
         for m in matches:
             if not spacer:
                 # should control minposition
-                logging.info(
+                logger.debug(
                     'check minpos %d against match pos %d' %
                     (data.minPosition, m['start'])
                 )
                 if m['start'] != data.minPosition:
-                    logging.info('skip match ' + json.dumps(m))
+                    logger.debug('skip match ' + json.dumps(m))
                     ban += 1
                     continue
             match = Match()
@@ -134,15 +139,10 @@ def __find(data, context_vars=[], spacer=False):
             __get_value(m['start'],  len(curVar['value']))
             match.match['value'] = __get_value(m['start'],  len(curVar['value']))
             results.append(match)
-            logging.error('Matches: ' + json.dumps(match.match))
-        logging.info(" [x] got matches " + str(len(matches) - ban))
+            logger.debug('Matches: ' + json.dumps(match.match))
+        logger.debug(" [x] got matches " + str(len(matches) - ban))
 
     return results
-
-
-def print_result(data):
-    logging.warn("Match!")
-    logging.info('Result: ' + json.dumps(data))
 
 
 def send_msg(msg_to, data):
@@ -151,7 +151,7 @@ def send_msg(msg_to, data):
     # sort matches by start position
     data['matches'].sort(key=lambda x: x['start'])
     json_data = json.dumps(data)
-    logging.debug("send msg " + json_data)
+    logger.debug("send msg " + json_data)
     redis_client.set(uid, json_data)
     channel.queue_declare(queue=msg_to, durable=True)
     channel.basic_publish(exchange='',
@@ -160,7 +160,7 @@ def send_msg(msg_to, data):
                           properties=pika.BasicProperties(
                              delivery_mode=2,  # make message persistent
                           ))
-    logging.info(" [x] Message sent to " + msg_to)
+    logger.debug(" [x] Message sent to " + msg_to)
 
 
 def go_next(result):
@@ -189,21 +189,32 @@ def go_next(result):
 
 
 def callback(ch, method, properties, body):
-    logging.info(" [x] Received %r" % body)
+    global ban_status
+    logger.debug(" [x] Received %r" % body)
     bodydata = redis_client.get(body)
     if bodydata is None:
-        logging.error('no body found')
+        logger.debug('no body found')
         ch.basic_ack(delivery_tag=method.delivery_tag)
         return
 
     redis_client.delete(body)
     result = json.loads(bodydata.decode('UTF-8'))
+    if result['step'] == g.STEP_BAN:
+        ban_status = True
+        logging.info("BAN request receiving, skipping messages")
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        return
     if result['step'] == STEP_END:
-        logging.warn('received stop message, exiting...')
+        logger.warn('received stop message, exiting...')
         ch.basic_ack(delivery_tag=method.delivery_tag)
         sys.exit(0)
 
-    logging.debug("Receive msg: " + json.dumps(result))
+    if ban_status:
+        redis_client.incr('logol:ban')
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        return
+
+    logger.debug("Receive msg: " + json.dumps(result))
 
     newContextVars = {}
     # if we start a new model or come back to model
@@ -222,7 +233,7 @@ def callback(ch, method, properties, body):
         result['inputs'] = []
 
     contextVars = result['context_vars'][-1]
-    logging.error('context vars: ' + json.dumps(contextVars))
+    logger.debug('context vars: ' + json.dumps(contextVars))
 
     if result['step'] == STEP_POST:
         # set back context , insert result as children and go to next var
@@ -262,7 +273,7 @@ def callback(ch, method, properties, body):
 
         # if next is a model/view should add a *from* model
         if curVar.get('model', None):
-            logging.info("call a model")
+            logger.debug("call a model")
             callModel = curVar['model']['name']
             msg_to = 'logol-%s-%s' % (callModel, wf[callModel]['start'])
             new_result = {
@@ -326,7 +337,7 @@ def callback(ch, method, properties, body):
                 save_as = curVar['string_constraints']['save_as']
                 contextVars[save_as] = m.match
             go_next(result)
-    logging.info(" [x] Done")
+    logger.debug(" [x] Done")
 
     ch.basic_ack(delivery_tag=method.delivery_tag)
 

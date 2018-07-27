@@ -5,6 +5,12 @@ import logging
 logger = logging.getLogger('logol')
 
 
+STEP_NONE = -1
+STEP_PRE = 0
+STEP_POST = 1
+STEP_END = 2
+STEP_BAN = 3
+
 def find_exact(match, part, pos=None):
     # naive search only for testing
     matches = []
