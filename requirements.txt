@@ -2,3 +2,6 @@ pika
 redis
 PyYAML
 pbr
+flask
+prometheus_client
+requests

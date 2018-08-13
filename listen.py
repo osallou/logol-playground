@@ -11,6 +11,11 @@ import uuid
 import yaml
 import redis
 
+import time
+import datetime
+
+import requests
+
 import logol.grammar as g
 
 
@@ -79,19 +84,31 @@ model = os.environ.get('LOGOL_MODEL', None)
 modelVar = os.environ.get('LOGOL_VAR', None)
 runId = os.environ.get('LOGOL_ID', 0)
 
+'''
 if not model or not modelVar:
     logger.error('model or modelVar not defined')
     sys.exit(1)
+'''
 
-queue = 'logol-%s-%s' % (model, modelVar)
+
+# queue = 'logol-%s-%s' % (model, modelVar)
+queue = 'logol-analyse'
 
 ban_status = False
 
 connection = pika.BlockingConnection(
     pika.ConnectionParameters(host='localhost')
 )
+
+# compute event queue
 channel = connection.channel()
 channel.queue_declare(queue=queue, durable=True)
+
+# global events exchange and queue
+channel.exchange_declare('logol-event-exchange', exchange_type='fanout')
+event_queue = channel.queue_declare(exclusive=True)
+channel.queue_bind(exchange='logol-event-exchange',
+                   queue=event_queue.method.queue)
 
 redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
 
@@ -102,7 +119,7 @@ def __get_value(start, length):
     return sequence[start: start + length]
 
 
-def __find(data, context_vars=[], spacer=False):
+def __find(data, model, modelVar, context_vars=[], spacer=False):
     curVar = wf[model]['vars'][modelVar]
     if (
         not curVar['value'] and
@@ -145,17 +162,21 @@ def __find(data, context_vars=[], spacer=False):
     return results
 
 
-def send_msg(msg_to, data):
+def send_msg(msg_to, data, result=False):
     # TODO add runId to msg_to and use same for queue definition
     uid = 'logol:' + uuid.uuid4().hex
     # sort matches by start position
     data['matches'].sort(key=lambda x: x['start'])
+    data['msg_to'] = msg_to
     json_data = json.dumps(data)
     logger.debug("send msg " + json_data)
     redis_client.set(uid, json_data)
-    channel.queue_declare(queue=msg_to, durable=True)
+    # channel.queue_declare(queue=msg_to, durable=True)
+    go_to = 'logol-analyse'
+    if result:
+        go_to = 'logol-result'
     channel.basic_publish(exchange='',
-                          routing_key=msg_to,
+                          routing_key=go_to,
                           body=uid,
                           properties=pika.BasicProperties(
                              delivery_mode=2,  # make message persistent
@@ -163,7 +184,7 @@ def send_msg(msg_to, data):
     logger.debug(" [x] Message sent to " + msg_to)
 
 
-def go_next(result):
+def go_next(result, model, modelVar):
     nextVars = wf[model]['vars'][modelVar]['next']
     if not nextVars:
         # Should check if there is a from to go back to calling model
@@ -182,7 +203,7 @@ def go_next(result):
             result['iteration'] = 1
             for modelOutput in wf[model]['params']['outputs']:
                     result['outputs'].append(result['context_vars'][-1][modelOutput])
-            send_msg('logol-result', result)
+            send_msg('logol-result', result, result=True)
     else:
         result['iteration'] = 1
         for nextVar in nextVars:
@@ -190,7 +211,7 @@ def go_next(result):
             send_msg(msg_to, result)
 
 
-def call_model(result, contextVars=None):
+def call_model(result, model, modelVar, contextVars=None):
     curVar = wf[model]['vars'][modelVar]
     callModel = curVar['model']['name']
     msg_to = 'logol-%s-%s' % (callModel, wf[callModel]['start'])
@@ -220,6 +241,17 @@ def call_model(result, contextVars=None):
     send_msg(msg_to, new_result)
 
 
+def send_stats(start_time, model, modelVar):
+    now = datetime.datetime.now()
+    end_time = time.mktime(now.timetuple())
+    duration = end_time - start_time
+    logger.debug('Stat:duration:%s' % (str(duration)))
+    try:
+        requests.put('http://localhost:5000/metric/%s/%s/%d' % (model, modelVar, int(duration)))
+    except Exception as e:
+        logger.exception('Failed to send stats')
+
+
 def callback(ch, method, properties, body):
     global ban_status
     logger.debug(" [x] Received %r" % body)
@@ -231,6 +263,7 @@ def callback(ch, method, properties, body):
 
     redis_client.delete(body)
     result = json.loads(bodydata.decode('UTF-8'))
+
     if result['step'] == g.STEP_BAN:
         ban_status = True
         logger.info("BAN request receiving, skipping messages")
@@ -247,6 +280,12 @@ def callback(ch, method, properties, body):
         return
 
     logger.debug("Receive msg: " + json.dumps(result))
+    now = datetime.datetime.now()
+    start_time = time.mktime(now.timetuple())
+    calledEnv = result['msg_to'].split('-')
+    model = calledEnv[-2]
+    modelVar = calledEnv[-1]
+    logger.debug('Call:Model:%s:Var:%s' % (model, modelVar))
 
     newContextVars = {}
     # if we start a new model or come back to model
@@ -299,7 +338,7 @@ def callback(ch, method, properties, body):
         result['matches'].append(match.match)
         result['step'] = STEP_NONE
         result['position'] = match.match['end']
-        go_next(result)
+        go_next(result, model, modelVar)
         curVar = wf[model]['vars'][modelVar]
         logger.debug(
             'model iteration status %d:%d:%d' %
@@ -315,7 +354,7 @@ def callback(ch, method, properties, body):
         ):
             logger.info('model iteration %d' % (result.get('iteration', 0)))
             redis_client.incr('logol:count', 1)
-            call_model(result, contextVars=result['context_vars'][-1])
+            call_model(result, model, modelVar, contextVars=result['context_vars'][-1])
 
     else:
         match = Match()
@@ -324,7 +363,7 @@ def callback(ch, method, properties, body):
         # if next is a model/view should add a *from* model
         if curVar.get('model', None):
             logger.debug("call a model")
-            call_model(result, contextVars=contextVars)
+            call_model(result, model, modelVar, contextVars=contextVars)
             '''
             callModel = curVar['model']['name']
             msg_to = 'logol-%s-%s' % (callModel, wf[callModel]['start'])
@@ -357,12 +396,13 @@ def callback(ch, method, properties, body):
             return
 
         match.minPosition = result['position']
-        matches = __find(match, context_vars=contextVars, spacer=result['spacer'])
+        matches = __find(match, model=model, modelVar=modelVar, context_vars=contextVars, spacer=result['spacer'])
         nextVars = wf[model]['vars'][modelVar]['next']
         nbNext = 0
 
         if not matches:
             redis_client.incr('logol:ban')
+            send_stats(start_time, model, modelVar)
             ch.basic_ack(delivery_tag=method.delivery_tag)
             return
 
@@ -389,9 +429,9 @@ def callback(ch, method, properties, body):
             ):
                 save_as = curVar['string_constraints']['save_as']
                 contextVars[save_as] = m.match
-            go_next(result)
+            go_next(result, model, modelVar)
     logger.debug(" [x] Done")
-
+    send_stats(start_time, model, modelVar)
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
@@ -399,4 +439,7 @@ channel.basic_qos(prefetch_count=1)
 channel.basic_consume(callback,
                       queue=queue)
 
+channel.basic_consume(callback,
+                      queue=event_queue.method.queue)
+logger.debug('listen to queues %s, %s' % (queue, event_queue.method.queue))
 channel.start_consuming()
