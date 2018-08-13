@@ -22,7 +22,7 @@ import logol.grammar as g
 logging.basicConfig(level=logging.INFO)
 
 logger = logging.getLogger('logol')
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.ERROR)
 
 sequence = 'cccccaaaaaacgtttttt'
 
@@ -181,8 +181,19 @@ def send_msg(msg_to, data, result=False):
                           properties=pika.BasicProperties(
                              delivery_mode=2,  # make message persistent
                           ))
-    logger.debug(" [x] Message sent to " + msg_to)
+    logger.debug(" [x] Message sent to %s, iteration %d" % (msg_to, data.get('iteration', 0)))
 
+
+def set_params(context_vars, params):
+    result = []
+    for modelOutput in params:
+        if modelOutput not in context_vars:
+            match = Match()
+            match.match['id'] = modelOutput
+            result.append(match.match)
+        else:
+            result.append(context_vars[modelOutput])
+    return result
 
 def go_next(result, model, modelVar):
     nextVars = wf[model]['vars'][modelVar]['next']
@@ -192,20 +203,25 @@ def go_next(result, model, modelVar):
             (back_model, back_var) = result['from'].pop().split('.')
             result['step'] = STEP_POST
             # set output vars
+            result['param'] = set_params(result['context_vars'][-1], wf[model]['param'])
+            '''
             result['outputs'] = []
             for modelOutput in wf[model]['params']['outputs']:
                 result['outputs'].append(result['context_vars'][-1][modelOutput])
-
+            '''
             msg_to = 'logol-%s-%s' % (back_model, back_var)
             send_msg(msg_to, result)
         else:
-            result['outputs'] = []
-            result['iteration'] = 1
+            # result['outputs'] = []
+            result['iteration'] = 0
+            result['param'] = set_params(result['context_vars'][-1], wf[model]['param'])
+            '''
             for modelOutput in wf[model]['params']['outputs']:
                     result['outputs'].append(result['context_vars'][-1][modelOutput])
+            '''
             send_msg('logol-result', result, result=True)
     else:
-        result['iteration'] = 1
+        result['iteration'] = 0
         for nextVar in nextVars:
             msg_to = 'logol-%s-%s' % (model, nextVar)
             send_msg(msg_to, result)
@@ -233,11 +249,15 @@ def call_model(result, model, modelVar, contextVars=None):
     new_result['matches'] = []
     new_result['spacer'] = result['spacer']
     new_result['position'] = result['position']
-    new_result['inputs'] = []
-    new_result['outputs'] = []
+    # new_result['inputs'] = []
+    # new_result['outputs'] = []
+    new_result['param'] = []
     if contextVars:
+        new_result['param'] = set_params(result['context_vars'][-1], curVar['model']['param'])
+        '''
         for modelInput in curVar['model']['inputs']:
             new_result['inputs'].append(contextVars[modelInput])
+        '''
     send_msg(msg_to, new_result)
 
 
@@ -291,6 +311,21 @@ def callback(ch, method, properties, body):
     # if we start a new model or come back to model
     if modelVar == wf[model]['start']:
         if (
+            wf[model].get('param', None)
+        ):
+            newContextVars = {}
+            for i in range(0, len(wf[model]['param'])):
+                inputId = wf[model]['param'][i]
+                try:
+                    newContextVars[inputId] = result['param'][i]
+                except Exception as e:
+                    logger.exception('param not defined')
+                    match = Match()
+                    match.match['id'] = inputId
+                    match.match['model'] = model
+                    newContextVars[inputId] = match.match
+        '''
+        if (
             wf[model].get('params', None) and
             result.get('inputs', None) and
             wf[model]['params'].get('inputs', None)
@@ -300,8 +335,10 @@ def callback(ch, method, properties, body):
             for i in range(0, len(wf[model]['params']['inputs'])):
                 inputId = wf[model]['params']['inputs'][i]
                 newContextVars[inputId] = result['inputs'][i]
+        '''
         result['context_vars'].append(newContextVars)
-        result['inputs'] = []
+        # result['inputs'] = []
+        result['param'] = []
 
     contextVars = result['context_vars'][-1]
     logger.debug('context vars: ' + json.dumps(contextVars))
@@ -310,6 +347,20 @@ def callback(ch, method, properties, body):
         # set back context , insert result as children and go to next var
         prev_context = result['context'].pop()
         result['context_vars'].pop()
+        if (
+            wf[model].get('param', None)
+        ):
+            for i in range(0, len(wf[model]['vars'][modelVar]['model']['param'])):
+                outputId =wf[model]['vars'][modelVar]['model']['param'][i]
+                try:
+                    contextVars[outputId] = result['param'][i]
+                except Exception as e:
+                    logger.exception('param not defined %s, params: %s' % ( outputId, str(result['param'])))
+                    match = Match()
+                    match.match['id'] = outputId
+                    match.match['model'] = model
+                    contextVars[outputId] = match.match
+        '''
         if (
             wf[model].get('params', None) and
             result.get('outputs', None) and
@@ -320,6 +371,8 @@ def callback(ch, method, properties, body):
                 outputId = wf[model]['params']['outputs'][i]
                 contextVars[outputId] = result['outputs'][i]
         result['outputs'] = []
+        '''
+        result['param'] = []
 
         match = Match()
         match.match['model'] = model
@@ -332,13 +385,15 @@ def callback(ch, method, properties, body):
                 match.match['end'] = m['end']
             match.match['sub'] += m['sub']
             match.match['indel'] += m['indel']
+        # match.match['iteration'] = result.get('iteration', 0)
         match.match['children'] = result['matches']
+
         # build match from matches
         result['matches'] = prev_context
         result['matches'].append(match.match)
         result['step'] = STEP_NONE
         result['position'] = match.match['end']
-        go_next(result, model, modelVar)
+        # go_next(result, model, modelVar)
         curVar = wf[model]['vars'][modelVar]
         logger.debug(
             'model iteration status %d:%d:%d' %
@@ -356,42 +411,17 @@ def callback(ch, method, properties, body):
             redis_client.incr('logol:count', 1)
             call_model(result, model, modelVar, contextVars=result['context_vars'][-1])
 
+        go_next(result, model, modelVar)
+
     else:
         match = Match()
+        # match.match['iteration'] = result.get('iteration', 0)
         curVar = wf[model]['vars'][modelVar]
 
         # if next is a model/view should add a *from* model
         if curVar.get('model', None):
             logger.debug("call a model")
             call_model(result, model, modelVar, contextVars=contextVars)
-            '''
-            callModel = curVar['model']['name']
-            msg_to = 'logol-%s-%s' % (callModel, wf[callModel]['start'])
-            new_result = {
-                    'from': [],
-                    'matches': [],
-                    'context_vars': [],
-                    'spacer': False,
-                    'context': [],
-                    'step': STEP_PRE,
-                    'position': 0
-            }
-            new_result['from'] = result['from']
-            result['from'] = []
-            new_result['from'].append(model + '.' + modelVar)
-            new_result['context_vars'] = result['context_vars']
-            new_result['context'].append(result['matches'])
-            new_result['matches'] = []
-            new_result['spacer'] = result['spacer']
-            new_result['position'] = result['position']
-            # result['context_vars']
-            new_result['inputs'] = []
-            new_result['outputs'] = []
-            for modelInput in curVar['model']['inputs']:
-                new_result['inputs'].append(contextVars[modelInput])
-
-            send_msg(msg_to, new_result)
-            '''
             ch.basic_ack(delivery_tag=method.delivery_tag)
             return
 

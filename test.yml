@@ -5,6 +5,7 @@ morphisms:
 mod3:
     comment: 'mod3()'
     start: 'var1'
+    param: []
     params:
         inputs: []
         outputs: []
@@ -16,6 +17,8 @@ mod3:
 mod2:
     comment: 'mod2(+R2)'
     start: 'var1'
+    param:
+        - R2
     params:
         inputs:
             - R2
@@ -30,6 +33,8 @@ mod2:
 
 mod1:
    comment: 'mod1(-R1)'
+   param:
+       - R1
    params:
      inputs: []
      outputs:
@@ -52,6 +57,7 @@ mod1:
          value: null
          model:
              name: 'mod3'
+             param: []
              inputs: []
              outputs: []
              repeatMin: 1
@@ -63,6 +69,8 @@ mod1:
          value: null
          model:
              name: 'mod2'
+             param:
+                 - R1
              inputs:
                  - R1
              outputs: []
