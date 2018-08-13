@@ -64,6 +64,15 @@ def send_ban():
                 send_msg(msg_to, {'step': g.STEP_BAN})
 
 
+def event_callback(ch, method, properties, body):
+    result = json.loads(body.decode('UTF-8'))
+    if result['step'] == STEP_END:
+        logging.warn('received stop message, exiting...')
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        result_file.close()
+        channel.queue_delete('logol-result')
+        sys.exit(0)
+
 def callback(ch, method, properties, body):
     global nb_results
     logging.info(" [x] Received %r" % body)
@@ -76,12 +85,14 @@ def callback(ch, method, properties, body):
     redis_client.delete(body)
     result = json.loads(bodydata.decode('UTF-8'))
 
+    '''
     if result['step'] == STEP_END:
         logging.warn('received stop message, exiting...')
         ch.basic_ack(delivery_tag=method.delivery_tag)
         result_file.close()
         channel.queue_delete('logol-result')
         sys.exit(0)
+    '''
 
     logging.info("Res: " + json.dumps(result))
     if nb_results < max_results:
@@ -100,6 +111,6 @@ def callback(ch, method, properties, body):
 channel.basic_qos(prefetch_count=1)
 channel.basic_consume(callback,
                       queue=queue)
-channel.basic_consume(callback,
+channel.basic_consume(event_callback,
                       queue=event_queue.method.queue)
 channel.start_consuming()

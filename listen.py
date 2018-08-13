@@ -22,7 +22,7 @@ import logol.grammar as g
 logging.basicConfig(level=logging.INFO)
 
 logger = logging.getLogger('logol')
-logger.setLevel(logging.ERROR)
+logger.setLevel(logging.DEBUG)
 
 sequence = 'cccccaaaaaacgtttttt'
 
@@ -93,6 +93,7 @@ if not model or not modelVar:
 
 # queue = 'logol-%s-%s' % (model, modelVar)
 queue = 'logol-analyse'
+result_queue = 'logol-result'
 
 ban_status = False
 
@@ -103,6 +104,7 @@ connection = pika.BlockingConnection(
 # compute event queue
 channel = connection.channel()
 channel.queue_declare(queue=queue, durable=True)
+channel.queue_declare(queue=result_queue, durable=True)
 
 # global events exchange and queue
 channel.exchange_declare('logol-event-exchange', exchange_type='fanout')
@@ -272,6 +274,21 @@ def send_stats(start_time, model, modelVar):
         logger.exception('Failed to send stats')
 
 
+def event_callback(ch, method, properties, body):
+    global ban_status
+    result = json.loads(body.decode('UTF-8'))
+
+    if result['step'] == g.STEP_BAN:
+        ban_status = True
+        logger.info("BAN request receiving, skipping messages")
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        return
+
+    if result['step'] == STEP_END:
+        logger.warn('received stop message, exiting...')
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        sys.exit(0)
+
 def callback(ch, method, properties, body):
     global ban_status
     logger.debug(" [x] Received %r" % body)
@@ -283,16 +300,6 @@ def callback(ch, method, properties, body):
 
     redis_client.delete(body)
     result = json.loads(bodydata.decode('UTF-8'))
-
-    if result['step'] == g.STEP_BAN:
-        ban_status = True
-        logger.info("BAN request receiving, skipping messages")
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-        return
-    if result['step'] == STEP_END:
-        logger.warn('received stop message, exiting...')
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-        sys.exit(0)
 
     if ban_status:
         redis_client.incr('logol:ban')
@@ -469,7 +476,7 @@ channel.basic_qos(prefetch_count=1)
 channel.basic_consume(callback,
                       queue=queue)
 
-channel.basic_consume(callback,
+channel.basic_consume(event_callback,
                       queue=event_queue.method.queue)
 logger.debug('listen to queues %s, %s' % (queue, event_queue.method.queue))
 channel.start_consuming()

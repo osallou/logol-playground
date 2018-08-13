@@ -49,11 +49,11 @@ def send_msg(msg_to, data):
 
 
 def send_event(data):
-    uid = 'logol:' + uuid.uuid4().hex
-    redis_client.set(uid, json.dumps(data))
+    # uid = 'logol:' + uuid.uuid4().hex
+    # redis_client.set(uid, json.dumps(data))
     channel.basic_publish(exchange='logol-event-exchange',
                           routing_key='',
-                          body=uid,
+                          body=json.dumps(data),
                           properties=pika.BasicProperties(
                              delivery_mode = 2, # make message persistent
                           ))
