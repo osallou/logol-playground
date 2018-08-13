@@ -31,6 +31,13 @@ connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost')
 channel = connection.channel()
 channel.queue_declare(queue=queue, durable=True)
 
+
+# global events exchange and queue
+channel.exchange_declare('logol-event-exchange', exchange_type='fanout')
+event_queue = channel.queue_declare(exclusive=True)
+channel.queue_bind(exchange='logol-event-exchange',
+                   queue=event_queue.method.queue)
+
 redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
 
 result_file = open('logol.out', 'w')
@@ -73,6 +80,7 @@ def callback(ch, method, properties, body):
         logging.warn('received stop message, exiting...')
         ch.basic_ack(delivery_tag=method.delivery_tag)
         result_file.close()
+        channel.queue_delete('logol-result')
         sys.exit(0)
 
     logging.info("Res: " + json.dumps(result))
@@ -92,5 +100,6 @@ def callback(ch, method, properties, body):
 channel.basic_qos(prefetch_count=1)
 channel.basic_consume(callback,
                       queue=queue)
-
+channel.basic_consume(callback,
+                      queue=event_queue.method.queue)
 channel.start_consuming()

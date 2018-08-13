@@ -37,10 +37,22 @@ result = {
 
 def send_msg(msg_to, data):
     uid = 'logol:' + uuid.uuid4().hex
+    data['msg_to'] = msg_to
     redis_client.set(uid, json.dumps(data))
-    channel.queue_declare(queue=msg_to, durable=True)
     channel.basic_publish(exchange='',
-                          routing_key=msg_to,
+                          routing_key='logol-analyse',
+                          body=uid,
+                          properties=pika.BasicProperties(
+                             delivery_mode = 2, # make message persistent
+                          ))
+    print(" [x] Message sent to " + msg_to)
+
+
+def send_event(data):
+    uid = 'logol:' + uuid.uuid4().hex
+    redis_client.set(uid, json.dumps(data))
+    channel.basic_publish(exchange='logol-event-exchange',
+                          routing_key='',
                           body=uid,
                           properties=pika.BasicProperties(
                              delivery_mode = 2, # make message persistent
@@ -49,33 +61,50 @@ def send_msg(msg_to, data):
 
 
 def __stop_processes():
+    send_event({'step': STEP_END})
+    '''
     send_msg('logol-result', {'step': STEP_END})
     for k in wf.keys():
         if k.startswith('mod'):
             for v in wf[k]['vars'].keys():
                 msg_to = 'logol-' + k + '-' + v
                 send_msg(msg_to, {'step': STEP_END})
+    '''
 
 connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-channel = connection.channel()
 
-channel.queue_declare(queue=msg_to, durable=True)
+# compute event queue
+channel = connection.channel()
+channel.queue_declare(queue='logol-analyse', durable=True)
+
+# global events exchange and queue
+channel.exchange_declare('logol-event-exchange', exchange_type='fanout')
+event_queue = channel.queue_declare(exclusive=True)
+channel.queue_bind(exchange='logol-event-exchange',
+                   queue=event_queue.method.queue)
+
+
 redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
 
 
-uid = 'logol:' + uuid.uuid4().hex
-redis_client.set(uid, json.dumps(result))
+
 redis_client.set('logol:count', 1)
 redis_client.set('logol:match', 0)
 redis_client.set('logol:ban', 0)
 
+send_msg(msg_to, result)
+'''
+uid = 'logol:' + uuid.uuid4().hex
+redis_client.set(uid, json.dumps(result))
 channel.basic_publish(exchange='',
                       routing_key=msg_to,
                       body=uid,
                       properties=pika.BasicProperties(
                          delivery_mode = 2, # make message persistent
                       ))
-print(" [x] Message sent")
+print(" [x] Message sent to %s" % (msg_to))
+'''
+
 
 not_over = True
 while not_over:
@@ -95,5 +124,6 @@ while not_over:
             not_over = False
         time.sleep(2)
 
-
+channel.exchange_delete('logol-event-exchange')
+channel.queue_delete('logol-analyse')
 connection.close()
